@@ -1,0 +1,98 @@
+@baseUrl = http://localhost:5000
+
+### Home Route
+GET {{baseUrl}}/
+
+### Login check
+GET {{baseUrl}}/api/auth/check
+
+### Login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+    "email": "trinadasgupta.official@gmail.com",
+    "password": "pass@123345"
+}
+
+### Logout
+POST {{baseUrl}}/api/auth/logout
+
+### Get About Data (Public)
+GET {{baseUrl}}/api/admin/about
+
+### Create About (Private)
+POST {{baseUrl}}/api/admin/about
+Content-Type: application/json
+
+{
+    "profilePic": "ssfsfdf",
+    "name": "Sahil",
+    "role": "sdss",
+    "miniDescription": "vdvv",
+    "description": "Ddd",
+    "currentFocus": "sfdd",
+    "skills": ["sfd"],
+    "tweetIds": ["dvvdv"],
+    "aboutReadme": "dff",
+}
+
+### Update About (Private)
+PATCH {{baseUrl}}/api/admin/about
+Content-Type: application/json
+
+{
+    "profilePic": "sfffds"
+}
+
+### Update tweetIds
+PATCH {{baseUrl}}/api/admin/tweetIds
+Content-Type: application/json
+
+{
+    "tweetIds": [""],
+}
+
+
+### Get TweetIds
+GET {{baseUrl}}/api/admin/tweetIds
+
+### Create Blog
+POST {{baseUrl}}/api/admin/blog
+Content-Type: application/json
+
+{
+    "title": "a",
+    "excerpt": "c",
+    "date": "c",
+    "readTime": "c",
+    "category": "d",
+    "mediumLink": ""
+}
+
+### Create Experience 
+POST {{baseUrl}}/api/admin/experience
+Content-Type: application/json
+
+{
+    "companyLogo": "sd",
+    "title": "Sdf",
+    "location": "f",
+    "timeLine": "fvv",
+    "isCurrent": truee
+}
+
+### Create Achievement
+POST {{baseUrl}}/api/admin/achievement
+Content-Type: application/json
+
+{
+    "companyLogo": "sd",
+    "title": "Sdf",
+    "location": "f",
+    "timeLine": "fvv",
+    "images": ["ccccccc", "dd"]
+}
+
+### Create Project (Private)
+POST {{baseUrl}}/api/admin/project
