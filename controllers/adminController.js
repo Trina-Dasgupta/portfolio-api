@@ -430,9 +430,8 @@ export const updateAchievementController = async (req, res) => {
 export const createSignedURLController = async (req, res) => {
   try {
     const { fileName, contentType, fileData } = req.body || {};
-
     console.log("Received upload request:", { fileName, contentType, hasFileData: !!fileData });
-
+    
     const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
     if (!allowedTypes.includes(contentType)) {
       return ApiResponse.error(res, null, {
@@ -442,16 +441,29 @@ export const createSignedURLController = async (req, res) => {
       });
     }
 
+    // Check if in serverless without S3
+    const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const hasS3 = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && 
+                     (process.env.AWS_S3_BUCKET_CUSTOM || process.env.AWS_BUCKET_NAME));
+    
+    if (isServerless && !hasS3) {
+      return ApiResponse.error(res, null, {
+        message: "File upload not configured. Please contact administrator.",
+        status: StatusCodes.SERVICE_UNAVAILABLE,
+        log: false,
+      });
+    }
+    
     const s3ObjectKey = `${crypto.randomUUID()}${path.extname(fileName)}`;
     console.log("Generated key:", s3ObjectKey);
-
+    
     const result = await generatePreSignedUploadURL({
       ContentType: contentType,
       Key: s3ObjectKey,
     });
-
+    
     console.log("Upload URL result:", result);
-
+    
     // If using local storage and fileData is provided, save it immediately
     if (result.useLocal && fileData) {
       console.log("Saving file locally...");
@@ -460,9 +472,8 @@ export const createSignedURLController = async (req, res) => {
         fileBase64: fileData,
         ContentType: contentType,
       });
-
       console.log("Save result:", saveResult);
-
+      
       return ApiResponse.success(res, {
         data: {
           url: saveResult.url,
@@ -472,7 +483,7 @@ export const createSignedURLController = async (req, res) => {
         status: StatusCodes.OK,
       });
     }
-
+    
     return ApiResponse.success(res, {
       data: {
         url: result.url,
@@ -485,12 +496,11 @@ export const createSignedURLController = async (req, res) => {
   } catch (error) {
     console.error("Error in createSignedURLController:", error);
     return ApiResponse.error(res, error, {
-      message: "Error creating pre-signed upload URL",
+      message: error.message || "Error creating pre-signed upload URL",
       status: StatusCodes.INTERNAL_SERVER_ERROR,
     });
   }
 };
-
 // Project Controller
 export const createProjectController = async (req, res) => {
   try {

@@ -45,9 +45,6 @@
 
 
 
-
-
-
 import {
   DeleteObjectCommand,
   PutObjectCommand,
@@ -63,9 +60,16 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const rootDir = path.resolve(__dirname, "./..");
-const localStoragePath = path.join(rootDir, "uploads");
+// Detect if running in serverless environment (Vercel, AWS Lambda, etc.)
+const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
+// Use /tmp for serverless, uploads folder for traditional hosting
+const rootDir = isServerless ? '/tmp' : path.resolve(__dirname, "./..");
+const localStoragePath = isServerless 
+  ? path.join('/tmp', 'uploads')
+  : path.join(rootDir, "uploads");
+
+console.log("Environment:", isServerless ? "Serverless" : "Traditional");
 console.log("Uploads folder path:", localStoragePath);
 
 // Create uploads folder if it doesn't exist
@@ -93,12 +97,16 @@ const s3Client = hasS3Credentials
     })
   : null;
 
-const baseURL = process.env.BASE_URL || "http://localhost:5000";
+const baseURL = process.env.BASE_URL || process.env.VERCEL_URL || "http://localhost:5000";
 
 // Log which mode we're using
 console.log("Storage mode:", s3Client ? "S3" : "Local");
 if (!s3Client) {
-  console.log("S3 credentials not found, using local storage");
+  console.log("⚠️ S3 credentials not found, using local storage");
+  if (isServerless) {
+    console.warn("⚠️ WARNING: Local storage in serverless is temporary and will be cleared!");
+    console.warn("⚠️ Please configure S3 for production use.");
+  }
   console.log("Missing:", {
     accessKey: !process.env.AWS_ACCESS_KEY_ID,
     secretKey: !process.env.AWS_SECRET_ACCESS_KEY,
@@ -107,6 +115,11 @@ if (!s3Client) {
 }
 
 export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
+  // Force S3 usage in serverless environments if configured
+  if (isServerless && !s3Client) {
+    throw new Error("S3 configuration required for serverless deployment");
+  }
+
   // Check if S3 is available
   if (s3Client && bucket) {
     try {
@@ -127,7 +140,13 @@ export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
       };
     } catch (error) {
       console.error("Error generating S3 signed URL:", error);
-      // Fallback to local storage if S3 fails
+      
+      // In serverless, don't fallback to local
+      if (isServerless) {
+        throw new Error("S3 upload failed in serverless environment");
+      }
+      
+      // Fallback to local storage only in traditional hosting
       console.log("Falling back to local storage due to S3 error");
       return {
         url: `${baseURL}/api/admin/local-upload`,
@@ -136,7 +155,12 @@ export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
       };
     }
   } else {
-    // Use local storage
+    // Block local storage in serverless
+    if (isServerless) {
+      throw new Error("S3 configuration required for serverless deployment. Local storage is not persistent.");
+    }
+    
+    // Use local storage (only in traditional hosting)
     return {
       url: `${baseURL}/api/admin/local-upload`,
       useLocal: true,
@@ -147,6 +171,11 @@ export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
 
 // Save file locally from base64
 export const saveLocalFile = async ({ Key, fileBase64, ContentType }) => {
+  // Block local storage in serverless
+  if (isServerless && !s3Client) {
+    throw new Error("S3 configuration required for serverless deployment. Local storage is not persistent.");
+  }
+
   try {
     const localFilePath = path.join(localStoragePath, Key);
     const dir = path.dirname(localFilePath);
@@ -202,7 +231,12 @@ export const deleteS3Object = async ({ Key }) => {
       throw error;
     }
   } else {
-    // Delete from local storage
+    // Block local deletion in serverless without S3
+    if (isServerless && !s3Client) {
+      throw new Error("S3 configuration required for serverless deployment");
+    }
+    
+    // Delete from local storage (only in traditional hosting)
     const localFilePath = path.join(localStoragePath, Key);
     try {
       if (fs.existsSync(localFilePath)) {
@@ -219,3 +253,4 @@ export const deleteS3Object = async ({ Key }) => {
 
 export const isUsingS3 = () => !!s3Client && !!bucket;
 export const getLocalStoragePath = () => localStoragePath;
+export const isServerlessEnvironment = () => isServerless;
