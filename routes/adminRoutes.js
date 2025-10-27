@@ -42,7 +42,8 @@ import {
   updateBlogSchema,
   updateExperienceSchema,
 } from "../validators/index.js";
-import { uploadMultiple, uploadSingle } from "../services/fileUpload.js";
+import { upload, uploadMultiple, uploadSingle } from "../services/fileUpload.js";
+import { saveToVercelBlob } from "../services/s3Services.js";
 
 const adminRouter = Router();
 
