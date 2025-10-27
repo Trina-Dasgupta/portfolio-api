@@ -48,7 +48,6 @@
 
 
 
-
 import {
   DeleteObjectCommand,
   PutObjectCommand,
@@ -64,15 +63,10 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Fix: Adjust this based on your actual project structure
-// If this file is at: src/services/s3Service.js
-// Then go up 2 levels to reach project root
 const rootDir = path.resolve(__dirname, "./..");
-
-// Create uploads folder INSIDE the project root
 const localStoragePath = path.join(rootDir, "uploads");
 
-console.log("Uploads folder path:", localStoragePath); // Debug log
+console.log("Uploads folder path:", localStoragePath);
 
 // Create uploads folder if it doesn't exist
 if (!fs.existsSync(localStoragePath)) {
@@ -80,45 +74,69 @@ if (!fs.existsSync(localStoragePath)) {
   console.log("Created uploads folder at:", localStoragePath);
 }
 
-// Initialize S3 Client only if credentials are available
-const s3Client = process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+// Check if S3 is properly configured
+const bucket = process.env.AWS_S3_BUCKET_CUSTOM || process.env.AWS_BUCKET_NAME;
+const hasS3Credentials = !!(
+  process.env.AWS_ACCESS_KEY_ID && 
+  process.env.AWS_SECRET_ACCESS_KEY && 
+  bucket
+);
+
+// Initialize S3 Client only if all credentials are available
+const s3Client = hasS3Credentials
   ? new S3Client({
       region: process.env.AWS_S3_REGION_CUSTOM || process.env.AWS_REGION,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID_CUSTOM || process.env.AWS_ACCESS_KEY,
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID_CUSTOM || process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY_CUSTOM || process.env.AWS_SECRET_ACCESS_KEY,
       },
     })
   : null;
 
-const bucket = process.env.AWS_S3_BUCKET_CUSTOM || process.env.AWS_BUCKET_NAME;
 const baseURL = process.env.BASE_URL || "http://localhost:5000";
 
 // Log which mode we're using
 console.log("Storage mode:", s3Client ? "S3" : "Local");
 if (!s3Client) {
   console.log("S3 credentials not found, using local storage");
+  console.log("Missing:", {
+    accessKey: !process.env.AWS_ACCESS_KEY_ID,
+    secretKey: !process.env.AWS_SECRET_ACCESS_KEY,
+    bucket: !bucket
+  });
 }
 
 export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
-  if (s3Client) {
-    // Use S3
-    const command = new PutObjectCommand({
-      Bucket: bucket,
-      Key,
-      ContentType,
-    });
+  // Check if S3 is available
+  if (s3Client && bucket) {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key,
+        ContentType,
+      });
 
-    const preSignedUploadURL = await getSignedUrl(s3Client, command, {
-      expiresIn: 300,
-      signableHeaders: new Set(["content-type"]),
-    });
-    return {
-      url: preSignedUploadURL,
-      useLocal: false,
-    };
+      const preSignedUploadURL = await getSignedUrl(s3Client, command, {
+        expiresIn: 300,
+        signableHeaders: new Set(["content-type"]),
+      });
+      
+      return {
+        url: preSignedUploadURL,
+        useLocal: false,
+      };
+    } catch (error) {
+      console.error("Error generating S3 signed URL:", error);
+      // Fallback to local storage if S3 fails
+      console.log("Falling back to local storage due to S3 error");
+      return {
+        url: `${baseURL}/api/admin/local-upload`,
+        useLocal: true,
+        key: Key,
+      };
+    }
   } else {
-    // Return local upload endpoint
+    // Use local storage
     return {
       url: `${baseURL}/api/admin/local-upload`,
       useLocal: true,
@@ -141,7 +159,7 @@ export const saveLocalFile = async ({ Key, fileBase64, ContentType }) => {
       console.log("Created directory:", dir);
     }
 
-    // Remove data URL prefix if present (e.g., "data:image/png;base64,")
+    // Remove data URL prefix if present
     const base64Data = fileBase64.replace(/^data:.*;base64,/, '');
     const fileBuffer = Buffer.from(base64Data, 'base64');
 
@@ -170,15 +188,19 @@ export const saveLocalFile = async ({ Key, fileBase64, ContentType }) => {
 };
 
 export const deleteS3Object = async ({ Key }) => {
-  if (s3Client) {
-    // Delete from S3
-    const command = new DeleteObjectCommand({
-      Bucket: bucket,
-      Key,
-    });
+  if (s3Client && bucket) {
+    try {
+      const command = new DeleteObjectCommand({
+        Bucket: bucket,
+        Key,
+      });
 
-    const res = await s3Client.send(command);
-    return res;
+      const res = await s3Client.send(command);
+      return res;
+    } catch (error) {
+      console.error("Error deleting from S3:", error);
+      throw error;
+    }
   } else {
     // Delete from local storage
     const localFilePath = path.join(localStoragePath, Key);
@@ -195,5 +217,5 @@ export const deleteS3Object = async ({ Key }) => {
   }
 };
 
-export const isUsingS3 = () => !!s3Client;
+export const isUsingS3 = () => !!s3Client && !!bucket;
 export const getLocalStoragePath = () => localStoragePath;
