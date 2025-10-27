@@ -45,40 +45,38 @@
 
 
 
+
 import {
   DeleteObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { put, del } from '@vercel/blob';
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import crypto from 'crypto';
 
 // Deriving __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Detect if running in serverless environment (Vercel, AWS Lambda, etc.)
-const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+const isVercel = !!process.env.VERCEL;
+const rootDir = path.resolve(__dirname, "./..");
+const localStoragePath = path.join(rootDir, "uploads");
 
-// Use /tmp for serverless, uploads folder for traditional hosting
-const rootDir = isServerless ? '/tmp' : path.resolve(__dirname, "./..");
-const localStoragePath = isServerless 
-  ? path.join('/tmp', 'uploads')
-  : path.join(rootDir, "uploads");
-
-console.log("Environment:", isServerless ? "Serverless" : "Traditional");
+console.log("Environment:", isVercel ? "Vercel" : "Local/VPS");
 console.log("Uploads folder path:", localStoragePath);
 
-// Create uploads folder if it doesn't exist
-if (!fs.existsSync(localStoragePath)) {
+// Create uploads folder if it doesn't exist (only works outside Vercel)
+if (!isVercel && !fs.existsSync(localStoragePath)) {
   fs.mkdirSync(localStoragePath, { recursive: true });
   console.log("Created uploads folder at:", localStoragePath);
 }
 
-// Check if S3 is properly configured
+// Check S3 configuration
 const bucket = process.env.AWS_S3_BUCKET_CUSTOM || process.env.AWS_BUCKET_NAME;
 const hasS3Credentials = !!(
   process.env.AWS_ACCESS_KEY_ID && 
@@ -86,7 +84,7 @@ const hasS3Credentials = !!(
   bucket
 );
 
-// Initialize S3 Client only if all credentials are available
+// Initialize S3 Client only if credentials are available
 const s3Client = hasS3Credentials
   ? new S3Client({
       region: process.env.AWS_S3_REGION_CUSTOM || process.env.AWS_REGION,
@@ -97,31 +95,23 @@ const s3Client = hasS3Credentials
     })
   : null;
 
-const baseURL = process.env.BASE_URL || process.env.VERCEL_URL || "http://localhost:5000";
+const baseURL = process.env.BASE_URL || 
+                (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:5000");
 
 // Log which mode we're using
-console.log("Storage mode:", s3Client ? "S3" : "Local");
-if (!s3Client) {
-  console.log("⚠️ S3 credentials not found, using local storage");
-  if (isServerless) {
-    console.warn("⚠️ WARNING: Local storage in serverless is temporary and will be cleared!");
-    console.warn("⚠️ Please configure S3 for production use.");
-  }
-  console.log("Missing:", {
-    accessKey: !process.env.AWS_ACCESS_KEY_ID,
-    secretKey: !process.env.AWS_SECRET_ACCESS_KEY,
-    bucket: !bucket
-  });
+if (s3Client) {
+  console.log("✅ Storage mode: AWS S3");
+} else if (isVercel) {
+  console.log("✅ Storage mode: Vercel Blob (S3 not configured)");
+} else {
+  console.log("✅ Storage mode: Local File System");
 }
 
 export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
-  // Force S3 usage in serverless environments if configured
-  if (isServerless && !s3Client) {
-    throw new Error("S3 configuration required for serverless deployment");
-  }
-
-  // Check if S3 is available
+  // Priority: S3 > Vercel Blob > Local
+  
   if (s3Client && bucket) {
+    // Use S3
     try {
       const command = new PutObjectCommand({
         Bucket: bucket,
@@ -137,45 +127,69 @@ export const generatePreSignedUploadURL = async ({ Key, ContentType }) => {
       return {
         url: preSignedUploadURL,
         useLocal: false,
+        useVercelBlob: false,
       };
     } catch (error) {
-      console.error("Error generating S3 signed URL:", error);
-      
-      // In serverless, don't fallback to local
-      if (isServerless) {
-        throw new Error("S3 upload failed in serverless environment");
-      }
-      
-      // Fallback to local storage only in traditional hosting
-      console.log("Falling back to local storage due to S3 error");
-      return {
-        url: `${baseURL}/api/admin/local-upload`,
-        useLocal: true,
-        key: Key,
-      };
+      console.error("S3 Error:", error);
+      // Fall through to next option
     }
-  } else {
-    // Block local storage in serverless
-    if (isServerless) {
-      throw new Error("S3 configuration required for serverless deployment. Local storage is not persistent.");
-    }
-    
-    // Use local storage (only in traditional hosting)
+  }
+  
+  if (isVercel) {
+    // Use Vercel Blob for Vercel deployments
     return {
-      url: `${baseURL}/api/admin/local-upload`,
-      useLocal: true,
+      url: `${baseURL}/api/admin/vercel-blob-upload`,
+      useLocal: false,
+      useVercelBlob: true,
       key: Key,
     };
+  }
+  
+  // Use local file system for traditional hosting
+  return {
+    url: `${baseURL}/api/admin/local-upload`,
+    useLocal: true,
+    useVercelBlob: false,
+    key: Key,
+  };
+};
+
+// Save file to Vercel Blob
+export const saveToVercelBlob = async ({ Key, fileBase64, ContentType }) => {
+  try {
+    console.log("Uploading to Vercel Blob...");
+    
+    // Remove data URL prefix if present
+    const base64Data = fileBase64.replace(/^data:.*;base64,/, '');
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    
+    console.log("File buffer size:", fileBuffer.length, "bytes");
+    
+    const blob = await put(Key, fileBuffer, {
+      access: 'public',
+      contentType: ContentType,
+    });
+
+    console.log("File uploaded to Vercel Blob:", blob.url);
+
+    return {
+      success: true,
+      url: blob.url,
+      key: Key,
+    };
+  } catch (error) {
+    console.error("Error uploading to Vercel Blob:", error);
+    throw error;
   }
 };
 
 // Save file locally from base64
 export const saveLocalFile = async ({ Key, fileBase64, ContentType }) => {
-  // Block local storage in serverless
-  if (isServerless && !s3Client) {
-    throw new Error("S3 configuration required for serverless deployment. Local storage is not persistent.");
+  if (isVercel) {
+    // Redirect to Vercel Blob on Vercel
+    return saveToVercelBlob({ Key, fileBase64, ContentType });
   }
-
+  
   try {
     const localFilePath = path.join(localStoragePath, Key);
     const dir = path.dirname(localFilePath);
@@ -216,8 +230,9 @@ export const saveLocalFile = async ({ Key, fileBase64, ContentType }) => {
   }
 };
 
-export const deleteS3Object = async ({ Key }) => {
+export const deleteS3Object = async ({ Key, url }) => {
   if (s3Client && bucket) {
+    // Delete from S3
     try {
       const command = new DeleteObjectCommand({
         Bucket: bucket,
@@ -230,13 +245,18 @@ export const deleteS3Object = async ({ Key }) => {
       console.error("Error deleting from S3:", error);
       throw error;
     }
-  } else {
-    // Block local deletion in serverless without S3
-    if (isServerless && !s3Client) {
-      throw new Error("S3 configuration required for serverless deployment");
+  } else if (isVercel && url) {
+    // Delete from Vercel Blob
+    try {
+      await del(url);
+      console.log("File deleted from Vercel Blob");
+      return { message: "File deleted from Vercel Blob", success: true };
+    } catch (error) {
+      console.error("Error deleting from Vercel Blob:", error);
+      throw error;
     }
-    
-    // Delete from local storage (only in traditional hosting)
+  } else {
+    // Delete from local storage
     const localFilePath = path.join(localStoragePath, Key);
     try {
       if (fs.existsSync(localFilePath)) {
@@ -252,5 +272,5 @@ export const deleteS3Object = async ({ Key }) => {
 };
 
 export const isUsingS3 = () => !!s3Client && !!bucket;
+export const isUsingVercelBlob = () => isVercel && !s3Client;
 export const getLocalStoragePath = () => localStoragePath;
-export const isServerlessEnvironment = () => isServerless;

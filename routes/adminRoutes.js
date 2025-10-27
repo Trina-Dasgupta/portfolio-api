@@ -47,13 +47,45 @@ import { uploadMultiple, uploadSingle } from "../services/fileUpload.js";
 const adminRouter = Router();
 
 
+// Add this route for Vercel Blob uploads
+adminRouter.post(
+  '/vercel-blob-upload',
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { key, fileData, contentType } = req.body;
+      
+      if (!fileData || !key) {
+        return res.status(400).json({
+          success: false,
+          message: 'Missing file data or key'
+        });
+      }
 
+      const result = await saveToVercelBlob({
+        Key: key,
+        fileBase64: fileData,
+        ContentType: contentType
+      });
 
-// Single file upload (existing)
+      return res.status(200).json({
+        success: true,
+        data: result
+      });
+    } catch (error) {
+      console.error('Vercel Blob upload error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+);
+
 adminRouter.post(
   '/local-upload',
   verifyAdmin,
-  uploadSingle,
+  upload.single('file'),
   (req, res) => {
     try {
       if (!req.file) {
@@ -64,16 +96,19 @@ adminRouter.post(
       }
 
       const baseURL = process.env.BASE_URL || 'http://localhost:5000';
-      const fileURL = `${baseURL}/uploads/${req.file.filename}`;
+      
+      const uploadedFile = {
+        url: `${baseURL}/uploads/${req.file.filename}`,
+        key: req.file.filename,
+        originalName: req.file.originalname,
+        size: req.file.size
+      };
 
-      console.log('File uploaded locally:', fileURL);
+      console.log('File uploaded locally:', req.file.filename);
 
       return res.status(200).json({
         success: true,
-        data: {
-          url: fileURL,
-          key: req.file.filename,
-        }
+        data: uploadedFile
       });
     } catch (error) {
       console.error('Local upload error:', error);

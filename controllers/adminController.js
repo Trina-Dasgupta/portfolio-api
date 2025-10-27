@@ -440,19 +440,6 @@ export const createSignedURLController = async (req, res) => {
         log: false,
       });
     }
-
-    // Check if in serverless without S3
-    const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
-    const hasS3 = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && 
-                     (process.env.AWS_S3_BUCKET_CUSTOM || process.env.AWS_BUCKET_NAME));
-    
-    if (isServerless && !hasS3) {
-      return ApiResponse.error(res, null, {
-        message: "File upload not configured. Please contact administrator.",
-        status: StatusCodes.SERVICE_UNAVAILABLE,
-        log: false,
-      });
-    }
     
     const s3ObjectKey = `${crypto.randomUUID()}${path.extname(fileName)}`;
     console.log("Generated key:", s3ObjectKey);
@@ -464,7 +451,26 @@ export const createSignedURLController = async (req, res) => {
     
     console.log("Upload URL result:", result);
     
-    // If using local storage and fileData is provided, save it immediately
+    // Handle Vercel Blob upload
+    if (result.useVercelBlob && fileData) {
+      console.log("Saving to Vercel Blob...");
+      const saveResult = await saveToVercelBlob({
+        Key: s3ObjectKey,
+        fileBase64: fileData,
+        ContentType: contentType,
+      });
+      
+      return ApiResponse.success(res, {
+        data: {
+          url: saveResult.url,
+          s3ObjectKey: saveResult.key,
+          useVercelBlob: true,
+        },
+        status: StatusCodes.OK,
+      });
+    }
+    
+    // Handle local upload
     if (result.useLocal && fileData) {
       console.log("Saving file locally...");
       const saveResult = await saveLocalFile({
@@ -472,7 +478,6 @@ export const createSignedURLController = async (req, res) => {
         fileBase64: fileData,
         ContentType: contentType,
       });
-      console.log("Save result:", saveResult);
       
       return ApiResponse.success(res, {
         data: {
@@ -489,14 +494,14 @@ export const createSignedURLController = async (req, res) => {
         url: result.url,
         s3ObjectKey,
         useLocal: result.useLocal || false,
-        finalUrl: result.finalUrl,
+        useVercelBlob: result.useVercelBlob || false,
       },
       status: StatusCodes.OK,
     });
   } catch (error) {
     console.error("Error in createSignedURLController:", error);
     return ApiResponse.error(res, error, {
-      message: error.message || "Error creating pre-signed upload URL",
+      message: error.message || "Error creating upload URL",
       status: StatusCodes.INTERNAL_SERVER_ERROR,
     });
   }
